@@ -1,6 +1,6 @@
 # ClaudeGameGen
 
-帮腾讯组里测试用 Claude 生成游戏的工作区。
+用 Claude 生成游戏的工作区。
 
 ## 目录
 
