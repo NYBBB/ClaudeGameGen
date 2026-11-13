@@ -691,6 +691,9 @@ function planLanterns() {
   // gate lanterns (hung from beams)
   const g0 = pathX(-4); LAMPS.push({ x: g0 - 1.7, y: 3.5, z: -3.7, ph: 1, post: false, big: 1.25 }, { x: g0 + 1.7, y: 3.5, z: -3.7, ph: 2.3, post: false, big: 1.25 });
   const g1 = pathX(224); LAMPS.push({ x: g1 - 4.0, y: LV.topY + 4.3, z: 222.6, ph: .4, post: false, big: 1.5 }, { x: g1 + 4.0, y: LV.topY + 4.3, z: 222.6, ph: 3.3, post: false, big: 1.5 });
+  // low stone lanterns mark the edges of each clearing
+  for (const a of LV.arenas) { const zs = a.w > 10 ? [a.c - a.h * .62, a.c, a.c + a.h * .62] : [a.c - a.h * .5, a.c + a.h * .5];
+    for (const z of zs) for (const s of [-1, 1]) { const x = pathX(z) + s * (pathW(z) + .24), y0 = rampY(z); LAMPS.push({ x, y: y0 + .96, z, ph: R() * TAU, post: false, big: .42, stone: true, y0 }); } }
   LAMPS.sort((a, b) => a.z - b.z);
 }
 function lampIrr(x, y, z, nx, ny, nz) {
@@ -860,18 +863,19 @@ function buildLanterns() {
   const bm = swayPatch(new THREE.MeshStandardMaterial({ map: TEX.lantern, emissiveMap: TEX.lantern, emissive: col('#ff7a38'), emissiveIntensity: 3.4, roughness: .7, metalness: 0, envMapIntensity: .2 }));
   const tm = swayPatch(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .5, metalness: .1 }));
   const bi = new THREE.InstancedMesh(body, bm, LAMPS.length), ti = new THREE.InstancedMesh(trim, tm, LAMPS.length);
-  LAMPS.forEach((L, i) => { const m = TM(L.x, L.y + .5 * L.big, L.z, 0, R() * TAU, 0, L.big, L.big, L.big); bi.setMatrixAt(i, m); ti.setMatrixAt(i, m); });
+  LAMPS.forEach((L, i) => { const k = L.stone ? 0 : L.big, m = TM(L.x, L.y + .5 * L.big, L.z, 0, R() * TAU, 0, k, k, k); bi.setMatrixAt(i, m); ti.setMatrixAt(i, m); });
   bi.frustumCulled = ti.frustumCulled = false; scene.add(bi, ti);
   World.lampBodyMat = bm;
   // additive halos (billboards) — sell the glow hanging in the mist
   const n = LAMPS.length, g = new THREE.InstancedBufferGeometry(); g.index = new THREE.PlaneGeometry(1, 1).index; g.setAttribute('position', new THREE.PlaneGeometry(1, 1).attributes.position); g.setAttribute('uv', new THREE.PlaneGeometry(1, 1).attributes.uv);
   const ip = new Float32Array(n * 4); LAMPS.forEach((L, i) => { ip[i * 4] = L.x; ip[i * 4 + 1] = L.y - .05; ip[i * 4 + 2] = L.z; ip[i * 4 + 3] = L.ph; });
   g.setAttribute('iPos', new THREE.InstancedBufferAttribute(ip, 4)); g.instanceCount = n;
+  { const ib = new Float32Array(n); LAMPS.forEach((L, i) => ib[i] = L.stone ? .5 : 1); g.setAttribute('iBig', new THREE.InstancedBufferAttribute(ib, 1)); }
   const hm = new THREE.ShaderMaterial({
     uniforms: { uTime: U_TIME, tex: { value: TEX.glow }, uDens: { value: scene.fog.density } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    vertexShader: `attribute vec4 iPos; uniform float uTime,uDens; varying vec2 vUv; varying float vA;
+    vertexShader: `attribute vec4 iPos; attribute float iBig; uniform float uTime,uDens; varying vec2 vUv; varying float vA;
       void main(){ vUv=uv; vec4 mv=viewMatrix*vec4(iPos.xyz,1.); float d=-mv.z; float fl=.86+.09*sin(uTime*7.3+iPos.w*5.)+.06*sin(uTime*13.1+iPos.w*9.);
-        float size=3.3+d*.035; mv.xy+=position.xy*size; vA=fl*exp(-d*d*uDens*uDens*.75)*smoothstep(.6,2.5,d); gl_Position=projectionMatrix*mv; }`,
+        float size=(3.3+d*.035)*iBig; mv.xy+=position.xy*size; vA=fl*exp(-d*d*uDens*uDens*.75)*smoothstep(.6,2.5,d); gl_Position=projectionMatrix*mv; }`,
     fragmentShader: `uniform sampler2D tex; varying vec2 vUv; varying float vA; void main(){ float a=texture2D(tex,vUv).a; gl_FragColor=vec4(vec3(1.,.36,.11)*a*vA*.62,1.); }` });
   const halo = new THREE.Mesh(g, hm); halo.frustumCulled = false; halo.renderOrder = 5; scene.add(halo);
   // pooled real lights that follow the player
@@ -935,6 +939,21 @@ function buildBamboo() {
     mk(c.sP, c.sN, c.sU, c.sC, c.sS, c.sL, c.sI, sm); mk(c.lP, c.lN, c.lU, c.lC, c.lS, c.lL, c.lI, lm);
   }
   World.stalkCount = stalks.length;
+  // fallen stalks and cut stumps on the banks
+  { const parts = [], up = new V3(0, 1, 0), dir = new V3(), q = new Quat(), one = new V3(1, 1, 1);
+    for (let i = 0; i < 64; i++) {
+      const z = rr(-30, 218), sd = R() < .5 ? -1 : 1, d = 1.5 + R() * 11, x = pathX(z) + sd * (pathW(z) + d), tc = tints[(R() * tints.length) | 0], k = rr(.5, .78), c = new Color(tc[0] * k, tc[1] * k * .9, tc[2] * k * .78), r = rr(.045, .075);
+      if (R() < .6) {
+        const len = rr(3.5, 8), ya = R() * TAU, hx = Math.sin(ya) * len * .5, hz = Math.cos(ya) * len * .5, y1 = groundH(x - hx, z - hz), y2 = groundH(x + hx, z + hz);
+        if (Math.abs(x - hx - pathX(z - hz)) < pathW(z - hz) + .6 || Math.abs(x + hx - pathX(z + hz)) < pathW(z + hz) + .6) continue;
+        const g = new THREE.CylinderGeometry(r * .72, r, len, 7, 1), uv = g.attributes.uv; for (let n = 0; n < uv.count; n++) uv.setY(n, uv.getY(n) * len / .46);
+        dir.set(hx * 2, y2 - y1, hz * 2).normalize(); q.setFromUnitVectors(up, dir); parts.push({ g, m: new M4().compose(new V3(x, (y1 + y2) / 2 + r * .8, z), q, one), c });
+      } else { const h = rr(.25, .9), g = new THREE.CylinderGeometry(r * .92, r, h, 7, 1), uv = g.attributes.uv; for (let n = 0; n < uv.count; n++) uv.setY(n, uv.getY(n) * h / .46); parts.push({ g, m: TM(x, groundH(x, z) + h / 2 - .05, z, (R() - .5) * .15, 0, (R() - .5) * .15), c }); }
+    }
+    const g = geoMerge(parts), p = g.attributes.position.array, nn = g.attributes.normal.array, lamp = new Float32Array(p.length / 3);
+    for (let i = 0; i < lamp.length; i++) lamp[i] = lampIrr(p[i * 3], p[i * 3 + 1], p[i * 3 + 2], nn[i * 3], nn[i * 3 + 1], nn[i * 3 + 2]);
+    g.setAttribute('aLamp', new THREE.BufferAttribute(lamp, 1)); g.setAttribute('aSway', new THREE.BufferAttribute(new Float32Array(p.length), 3));
+    const logs = new THREE.Mesh(g, sm); logs.receiveShadow = true; scene.add(logs); }
   // undergrowth
   const P = [], N = [], U = [], C = [], S = [], L = [], I = [];
   for (let i = 0; i < 1500; i++) {
@@ -993,6 +1012,16 @@ function buildProps() {
       const tip = new THREE.Mesh(new THREE.SphereGeometry(.014, 6, 4), new THREE.MeshBasicMaterial({ color: new Color(.05, .01, .0) })); tip.position.set(x + (i - 1) * .05 - (i - 1) * .02, y + 1.1, z + (i % 2) * .03); tips.add(tip); }
     scene.add(tips); sh.tips = tips;
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX.glow, color: new Color(1, .5, .18), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false })); glow.position.set(x, y + 1.0, z); glow.scale.set(2.6, 2.6, 1); scene.add(glow); sh.glow = glow;
+  }
+  // --- stone lanterns (their light is planned in LAMPS, so it is baked and haloed like the paper ones)
+  { const glow = [];
+    for (const L of LAMPS) { if (!L.stone) continue; const x = L.x, y = L.y0, z = L.z, ry = Math.atan(pathDX(z)) + (R() - .5) * .3, c = Math.cos(ry), s = Math.sin(ry);
+      sp.push({ g: new THREE.BoxGeometry(.52, .16, .52), m: TM(x, y + .08, z, 0, ry, 0), c: stn }, { g: new THREE.CylinderGeometry(.085, .12, .56, 8), m: TM(x, y + .44, z), c: stn }, { g: new THREE.BoxGeometry(.46, .07, .46), m: TM(x, y + .755, z, 0, ry, 0), c: stn },
+        { g: new THREE.BoxGeometry(.42, .05, .42), m: TM(x, y + 1.135, z, 0, ry, 0), c: stn }, { g: new THREE.ConeGeometry(.42, .26, 4), m: TM(x, y + 1.29, z, 0, ry + PI / 4, 0), c: stn }, { g: new THREE.SphereGeometry(.055, 8, 6), m: TM(x, y + 1.45, z), c: stn });
+      for (const [ox, oz] of [[-.15, -.15], [.15, -.15], [-.15, .15], [.15, .15]]) sp.push({ g: new THREE.BoxGeometry(.065, .34, .065), m: TM(x + ox * c + oz * s, y + .95, z - ox * s + oz * c, 0, ry, 0), c: stn });
+      glow.push({ g: new THREE.BoxGeometry(.24, .28, .24), m: TM(x, y + .95, z, 0, ry, 0) });
+    }
+    if (glow.length) { const gm = new THREE.Mesh(geoMerge(glow), new THREE.MeshBasicMaterial({ color: new Color(3.4, 1.3, .38) })); scene.add(gm); }
   }
   const wm = new THREE.Mesh(geoMerge(wp), wood); wm.castShadow = true; wm.receiveShadow = true; scene.add(wm);
   const smesh = new THREE.Mesh(geoMerge(sp), stoneM); smesh.castShadow = true; smesh.receiveShadow = true; scene.add(smesh);
@@ -1099,17 +1128,17 @@ function updateWorld(dt, rdt, pp) {
 //  hand/foot targets + blade direction; the solver derives all joints.
 // =====================================================================
 const DOWN = new V3(0, -1, 0);
-const PV = ['hip', 'hipRot', 'spine', 'head', 'rh', 'blade', 'lh', 'lf', 'rf'], PS = ['lg', 'spin'];
-function poseNew() { return { hip: [0, 0, 0], hipRot: [0, 0, 0], spine: [0, 0, 0], head: [0, 0, 0], rh: [.26, .8, .04], blade: [.12, -.62, .77], lh: [-.25, .8, .02], lf: [-.1, 0, 0], rf: [.1, 0, 0], lg: 0, spin: 0 }; }
-function poseCopy(d, s) { for (let i = 0; i < PV.length; i++) { const a = d[PV[i]], b = s[PV[i]]; a[0] = b[0]; a[1] = b[1]; a[2] = b[2]; } d.lg = s.lg; d.spin = s.spin; return d; }
+const PV = ['hip', 'hipRot', 'spine', 'head', 'rh', 'blade', 'lh', 'lf', 'rf'], PS = ['lg', 'spin', 'lfp', 'rfp'];   // lfp/rfp: extra foot pitch (+ = toes down)
+function poseNew() { return { hip: [0, 0, 0], hipRot: [0, 0, 0], spine: [0, 0, 0], head: [0, 0, 0], rh: [.26, .8, .04], blade: [.12, -.62, .77], lh: [-.25, .8, .02], lf: [-.1, 0, 0], rf: [.1, 0, 0], lg: 0, spin: 0, lfp: 0, rfp: 0 }; }
+function poseCopy(d, s) { for (let i = 0; i < PV.length; i++) { const a = d[PV[i]], b = s[PV[i]]; a[0] = b[0]; a[1] = b[1]; a[2] = b[2]; } for (let i = 0; i < PS.length; i++) d[PS[i]] = s[PS[i]]; return d; }
 function poseLerp(o, a, b, t) {
   for (let i = 0; i < PV.length; i++) { const k = PV[i], x = a[k], y = b[k], z = o[k]; z[0] = x[0] + (y[0] - x[0]) * t; z[1] = x[1] + (y[1] - x[1]) * t; z[2] = x[2] + (y[2] - x[2]) * t; }
-  o.lg = a.lg + (b.lg - a.lg) * t; o.spin = a.spin + (b.spin - a.spin) * t;
+  for (let i = 0; i < PS.length; i++) { const k = PS[i]; o[k] = a[k] + (b[k] - a[k]) * t; }
   const bl = o.blade, l = Math.hypot(bl[0], bl[1], bl[2]); if (l > 1e-4) { bl[0] /= l; bl[1] /= l; bl[2] /= l; } else { bl[0] = b.blade[0]; bl[1] = b.blade[1]; bl[2] = b.blade[2]; }
   return o;
 }
 function poseFrom(base, part) { const p = poseCopy(poseNew(), base); for (const k in part) { if (PV.indexOf(k) >= 0) { p[k][0] = part[k][0]; p[k][1] = part[k][1]; p[k][2] = part[k][2]; } else if (PS.indexOf(k) >= 0) p[k] = part[k]; } return p; }
-function posePart(p) { const o = {}; for (const k of PV) o[k] = p[k].slice(); o.lg = p.lg; o.spin = p.spin; return o; }
+function posePart(p) { const o = {}; for (const k of PV) o[k] = p[k].slice(); for (const k of PS) o[k] = p[k]; return o; }
 const EASE = { l: u => u, i: u => u * u, o: u => 1 - (1 - u) * (1 - u), io: u => u * u * (3 - 2 * u), i3: u => u * u * u, o3: u => 1 - Math.pow(1 - u, 3) };
 function mkClip(base, keys, opt = {}) {
   let prev = base; const ks = keys.map(k => { const p = poseFrom(prev, k); prev = p; return { t: k.t, e: k.e || 'io', p }; });
@@ -1129,7 +1158,7 @@ function clipEval(clip, t, out) {
     if (SPL[k]) { const m = pm[k], c = pn[k]; for (let j = 0; j < 3; j++) o[j] = .5 * (2 * a[j] + (-m[j] + b[j]) * u + (2 * m[j] - 5 * a[j] + 4 * b[j] - c[j]) * u2 + (-m[j] + 3 * a[j] - 3 * b[j] + c[j]) * u3); }
     else { o[0] = a[0] + (b[0] - a[0]) * u; o[1] = a[1] + (b[1] - a[1]) * u; o[2] = a[2] + (b[2] - a[2]) * u; }
   }
-  out.lg = p0.lg + (p1.lg - p0.lg) * u; out.spin = p0.spin + (p1.spin - p0.spin) * u;
+  for (let q = 0; q < PS.length; q++) { const k = PS[q]; out[k] = p0[k] + (p1[k] - p0[k]) * u; }
   const bl = out.blade, l = Math.hypot(bl[0], bl[1], bl[2]) || 1; bl[0] /= l; bl[1] /= l; bl[2] /= l;
   return out;
 }
@@ -1212,7 +1241,7 @@ class Rig {
       const L = s === 0, th = L ? this.thL : this.thR, sh = L ? this.shL : this.shR, ft = L ? this.ftL : this.ftR, fp = L ? p.lf : p.rf, go = (L ? this.gL : this.gR) * gk;
       _a.copy(th.position).applyQuaternion(qH).add(hips.position); _b.set(-fp[0], fp[1] + D.ankle + go, fp[2]); _c.set(L ? .16 : -.16, .12, 1).applyQuaternion(qH);
       this.ik(th, sh, _a, _b, _c, qH, D.thigh, D.shin, L ? this.footL : this.footR, _qc, L ? this.kneeL : this.kneeR);
-      _eu.set(clamp(fp[1] * 2.4, 0, .9), L ? .2 : -.2, 0, 'YXZ'); _qb.setFromEuler(_eu);
+      _eu.set(clamp(fp[1] * 1.3, 0, .55) + (L ? p.lfp : p.rfp), L ? .2 : -.2, 0, 'YXZ'); _qb.setFromEuler(_eu);
       ft.quaternion.copy(_qc).invert().multiply(_qb); if (lie > 0) { _qa.set(0, 0, 0, 1); ft.quaternion.slerp(_qa, lie); }
     }
   }
@@ -1417,23 +1446,60 @@ function buildEnemyClips() {
 }
 
 // ---------- procedural locomotion + dodge ----------
+// Gait model: each foot alternates a planted stance (it slides back under the body at exactly
+// the body's speed, so it stays put in the world) and a swing (Hermite arc that follows through
+// behind and retracts before landing). Cadence, stride and duty factor come from speed.
+const GP = { fc: 1, L: 0, duty: .6, r: 0 };
+function gaitParams(v, mr, mf, o) {
+  const r = smooth(2.0, 3.4, v), lat = Math.abs(mr), sh = (1 - .42 * lat) * (mf < -.3 ? .82 : 1);
+  const fc = lerp(.55 + .29 * v, .94 + .125 * v, r) / sh, dutyN = lerp(.62, .40, r), Lmax = lerp(.92, .98, r) * sh;
+  let L = v * dutyN / fc; if (L > Lmax) L = Lmax;
+  o.fc = fc; o.L = L; o.r = r; o.duty = v > .05 ? clamp(L * fc / v, .22, .68) : dutyN; return o;
+}
 function locoPose(out, base, o) {
   poseCopy(out, base);
-  const run = o.run, amp = sat(o.speed / 1.4), A = lerp(.15, .43, run) * amp, ph = o.phase, mr = o.mr, mf = o.mf, lift = (.045 + .14 * run) * amp;
-  const k = 1 - run * amp * .85;
+  const v = o.speed, G = gaitParams(v, o.mr, o.mf, GP), r = G.r, L = G.L, duty = G.duty, ph = o.phase, mr = o.mr, mf = o.mf;
+  const amp = smooth(.05, .8, v), ra = r * amp, sprint = smooth(4.8, 6.4, v), fwd = Math.max(0, mf), turn = sat((Math.abs(o.turn || 0) - 1.2) / 3) * (1 - amp);
+  const k = 1 - ra * .9, track = lerp(1, .5, ra), Tsw = (1 - duty) / G.fc, pMax = lerp(.34, .74, r) * amp * (.35 + .65 * fwd);
   for (let s = 0; s < 2; s++) {
-    const f = s === 0 ? out.lf : out.rf, b = s === 0 ? base.lf : base.rf, a = ph + (s ? PI : 0), al = A * Math.cos(a);
-    f[0] = b[0] * (1 - .25 * run * amp) + mr * al; f[2] = b[2] * k + mf * al; f[1] = lift * Math.max(0, -Math.sin(a));
+    const f = s ? out.rf : out.lf, b = s ? base.rf : base.lf; let u = ph + (s ? .5 : 0); u -= Math.floor(u);
+    let al, lift, pitch;
+    if (u < duty) {                                   // stance: planted, heel peels off at the end
+      const q = u / duty, ho = smooth(.68, 1, q); al = L * (.44 - q); pitch = ho * ho * pMax - .26 * amp * fwd * (1 - smooth(0, .14, q)); lift = .12 * Math.sin(Math.max(0, pitch));
+    } else {                                          // swing
+      const q = (u - duty) / (1 - duty), p0 = -.56 * L, p1 = .44 * L, m = -.55 * v * Tsw, q2 = q * q, q3 = q2 * q;
+      al = (2 * q3 - 3 * q2 + 1) * p0 + (q3 - 2 * q2 + q) * m + (-2 * q3 + 3 * q2) * p1 + (q3 - q2) * m;
+      const hq = Math.pow(q, lerp(.9, .68, r));
+      lift = (lerp(.05, .19, r) + .07 * sprint) * Math.pow(Math.sin(PI * hq), 1.15) * amp + .12 * Math.sin(pMax) * (1 - smooth(0, .4, q)) + .045 * turn * Math.sin(PI * q);
+      pitch = lerp(pMax, -.26 * amp * fwd, smooth(.12, .85, q));
+    }
+    f[0] = b[0] * lerp(1, track, Math.abs(mf)) + mr * al; f[2] = b[2] * k + mf * al; f[1] = lift;
+    if (s) out.rfp = pitch; else out.lfp = pitch;
   }
-  const br = Math.sin(o.t * 1.7) * .006;
-  out.hip[1] += br - .025 * amp - .05 * run * amp + .028 * amp * Math.cos(2 * ph) * (.5 + run);
-  out.hipRot[0] += (.06 + .2 * run) * amp * mf; out.hipRot[2] += .1 * amp * mr + .03 * amp * Math.sin(ph);
-  out.hipRot[1] = out.hipRot[1] * k + .13 * amp * Math.cos(ph) * mf; out.spine[1] = out.spine[1] * k - .18 * amp * Math.cos(ph) * mf;
-  out.spine[0] += br * 2 + .05 * run * amp; out.head[1] *= k; out.head[0] -= .12 * run * amp * mf;
-  out.lh[2] += -.16 * amp * Math.cos(ph) * mf * (.6 + run); out.lh[1] += .03 * amp * Math.abs(Math.sin(ph));
-  if (o.swordRun) { const w = run * amp; out.rh[0] = lerp(out.rh[0], .33, w); out.rh[1] = lerp(out.rh[1], .84, w); out.rh[2] = lerp(out.rh[2], -.10 + .1 * Math.cos(ph), w);
-    out.blade[0] = lerp(out.blade[0], .25, w); out.blade[1] = lerp(out.blade[1], -.22, w); out.blade[2] = lerp(out.blade[2], -.94, w); const l = Math.hypot(out.blade[0], out.blade[1], out.blade[2]) || 1; out.blade[0] /= l; out.blade[1] /= l; out.blade[2] /= l; }
-  else out.rh[2] += .05 * amp * Math.cos(ph) * mf;
+  // pelvis: bob (walk peaks at mid-stance, run dips there), weight shift, rotation with the stride, list
+  const m0 = ph - duty * .5, c2 = Math.cos(TAU * 2 * m0), c1 = Math.cos(TAU * m0), cy = Math.cos(TAU * ph);
+  const t = o.t, breath = Math.sin(t * 1.65), still = 1 - amp;
+  out.hip[1] += -(.02 + .05 * r) * amp + c2 * lerp(.02, -.045, r) * amp - .03 * sprint * amp + breath * .005 * still;
+  out.hip[0] += -c1 * .022 * (1 - .6 * r) * amp * Math.abs(mf) + (vnoise(t * .13, 3.7) - .5) * .03 * still;
+  const yawP = .075 * (1 + .7 * r) * cy * amp * mf, roll = .04 * (1 + .3 * r) * c1 * amp;
+  const lean = (.03 + .1 * r + .09 * sprint) * amp * mf + clamp((o.acc || 0) * .011, -.1, .13);
+  out.hipRot[0] += lean; out.hipRot[1] = out.hipRot[1] * k + yawP;
+  out.hipRot[2] += roll + .09 * amp * mr + clamp(-(o.turn || 0) * v * .011, -.2, .2) + (vnoise(t * .13, 3.7) - .5) * .035 * still;
+  const shY = .1 * (.5 + r) * cy * amp * mf;
+  out.spine[0] += .04 * ra + lean * .35 + breath * .013; out.spine[1] = out.spine[1] * k - yawP - shY; out.spine[2] -= roll * .8;
+  out.head[0] -= (.1 * r + .06 * sprint) * amp * mf + lean * .3 + breath * .006; out.head[1] = out.head[1] * k + shY * .85 + (vnoise(t * .21, 8.1) - .5) * .14 * still;
+  // free arm swings against its leg; elbow folds as the pace picks up
+  const a = (o.arms === undefined ? 1 : o.arms) * amp;
+  if (a > .001) {
+    const th = (-lerp(.3, .62, r) * cy + .2 * r) * (mf >= 0 ? 1 : .5), R = lerp(.55, .40, r), sy = 1.4 + out.hip[1];
+    out.lh[0] = lerp(out.lh[0], -.225 + .05 * Math.max(0, Math.sin(th)) * r, a); out.lh[1] = lerp(out.lh[1], sy - Math.cos(th) * R * lerp(1, .68, r), a); out.lh[2] = lerp(out.lh[2], out.hip[2] + Math.sin(th) * R + .05 * r, a);
+  } else { out.lh[2] -= .06 * cy * amp * mf; out.lh[1] += c2 * .008 * amp; }
+  if (o.swordRun) {                                    // sword carried low and trailing, pumping with the stride
+    const w = ra; out.rh[0] = lerp(out.rh[0], .33, w); out.rh[1] = lerp(out.rh[1], .85 + .03 * cy, w); out.rh[2] = lerp(out.rh[2], -.08 + .12 * cy, w);
+    out.blade[0] = lerp(out.blade[0], .25, w); out.blade[1] = lerp(out.blade[1], -.22 - .06 * cy, w); out.blade[2] = lerp(out.blade[2], -.94, w);
+    out.rh[2] += .07 * cy * amp * (1 - r) * mf; out.rh[1] += breath * .004 * still;
+    const l = Math.hypot(out.blade[0], out.blade[1], out.blade[2]) || 1; out.blade[0] /= l; out.blade[1] /= l; out.blade[2] /= l;
+  } else { out.rh[2] += .035 * cy * amp * mf; out.rh[1] += c2 * .01 * amp + breath * .004 * still; }
   return out;
 }
 function dodgePose(out, base, r, f, u) {
@@ -1482,7 +1548,11 @@ function charMats() {
   const armor = patchChar(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: .5, metalness: .75, envMapIntensity: 1.1 }), U);
   return { U, matte, metal, straw, cloth2, armor };
 }
-const limbGeo = (len, r1, r2) => [{ g: new THREE.CylinderGeometry(r1, r2, len, 10, 1, true), m: TM(0, -len / 2, 0) }, { g: new THREE.SphereGeometry(r1, 10, 7), m: TM(0, 0, 0) }, { g: new THREE.SphereGeometry(r2, 10, 7), m: TM(0, -len, 0) }];
+// limb segment as a lathe: tapers joint to joint with a muscle swell (thigh, calf, forearm) instead of a plain tube
+const limbGeo = (len, r1, r2, bulge = 0, bpos = .3) => {
+  const pts = [], N = 9; for (let i = 0; i <= N; i++) { const t = 1 - i / N; pts.push(new THREE.Vector2(lerp(r1, r2, t) * (1 + bulge * Math.exp(-Math.pow((t - bpos) / .27, 2))), -len * t)); }
+  return [{ g: new THREE.LatheGeometry(pts, 12) }, { g: new THREE.SphereGeometry(r1, 12, 8), m: TM(0, 0, 0) }, { g: new THREE.SphereGeometry(r2, 12, 8), m: TM(0, -len, 0) }];
+};
 const ell = (rx, ry, rz, x, y, z, w = 14, h = 10) => ({ g: new THREE.SphereGeometry(1, w, h), m: TM(x, y, z, 0, 0, 0, rx, ry, rz) });
 const withC = (arr, c) => arr.map(p => ({ ...p, c }));
 
@@ -1531,7 +1601,7 @@ function buildCharacter(kind) {
   const iron = C.armor || col('#3a3d42'), bronze = col('#7a6030'), dark = col('#0a0a0c');
   // torso
   add(rig.hips, [{ ...ell(.165 * bk, .125, .122 * bk, 0, -.01, 0), c: C.robe2 }]);
-  add(rig.spine, [{ ...ell(.15 * bk, .15, .114 * bk, 0, .06, 0), c: C.robe }, { g: new THREE.CylinderGeometry(.151, .158, .09, 14), m: TM(0, -.005, 0, 0, 0, 0, 1, 1, .78), c: C.sash }, { g: new THREE.BoxGeometry(.075, .065, .05), m: TM(.07, -.005, .112), c: C.sash }, { g: new THREE.BoxGeometry(.04, .22, .015), m: TM(.08, -.13, .122, .06, 0, .05), c: C.sash }, { g: new THREE.BoxGeometry(.035, .17, .015), m: TM(.05, -.11, .125, .05, 0, -.08), c: C.sash }]);
+  add(rig.spine, [{ ...ell(.15 * bk, .15, .114 * bk, 0, .06, 0), c: C.robe }, { g: new THREE.CylinderGeometry(.151, .158, .09, 14), m: TM(0, -.005, 0, 0, 0, 0, 1, 1, .78), c: C.sash }, { g: new THREE.BoxGeometry(.075, .065, .05), m: TM(.07, -.005, .112), c: C.sash }]);
   add(rig.chest, [{ ...ell(.182 * bk, .185, .124 * bk, 0, .115, 0), c: C.robe }, { ...ell(.066, .062, .066, -D.shW, D.shY - .005, 0, 10, 8), c: C.robe }, { ...ell(.066, .062, .066, D.shW, D.shY - .005, 0, 10, 8), c: C.robe },
     { ...ell(.105, .06, .085, 0, .245, -.005, 12, 8), c: C.robe }, { g: new THREE.CylinderGeometry(.043, .052, .1, 10), m: TM(0, .275, 0), c: C.skin },
     { g: new THREE.BoxGeometry(.04, .21, .018), m: TM(.035, .15, .112, -.12, 0, .3), c: C.trim }, { g: new THREE.BoxGeometry(.04, .21, .018), m: TM(-.035, .15, .112, -.12, 0, -.3), c: C.trim }]);
@@ -1549,8 +1619,7 @@ function buildCharacter(kind) {
     { ...ell(.017, .008, .008, -.034, .092, .083, 6, 4), c: dark }, { ...ell(.017, .008, .008, .034, .092, .083, 6, 4), c: dark }, { g: new THREE.BoxGeometry(.036, .008, .012), m: TM(-.034, .108, .086, 0, 0, .12), c: C.hair }, { g: new THREE.BoxGeometry(.036, .008, .012), m: TM(.034, .108, .086, 0, 0, -.12), c: C.hair }];
   if (st.face) head.push({ g: new THREE.SphereGeometry(1, 14, 10, 0, PI), m: TM(0, .068, .01, 0, 0, 0, .09, .112, .106), c: C.face }, { ...ell(.02, .007, .006, -.034, .09, .112, 6, 4), c: dark }, { ...ell(.02, .007, .006, .034, .09, .112, 6, 4), c: dark });
   head.push({ g: new THREE.SphereGeometry(1, 14, 8, 0, TAU, 0, PI * .56), m: TM(0, .088, -.01, -.34, 0, 0, .099, .112, .107), c: C.hair });
-  if (kind === 'player') head.push({ ...ell(.032, .03, .032, 0, .2, -.04, 8, 6), c: C.hair }, { g: new THREE.CylinderGeometry(.026, .01, .3, 8), m: TM(0, .04, -.125, .42), c: C.hair });
-  if (kind === 'elite') head.push({ g: new THREE.CylinderGeometry(.03, .012, .36, 8), m: TM(0, .0, -.13, .35), c: C.hair });
+  if (kind === 'player' || kind === 'elite') head.push({ ...ell(.032, .03, .032, 0, .2, -.04, 8, 6), c: C.hair }, { ...ell(.03, .034, .03, 0, .1, -.105, 8, 6), c: C.hair });
   if (C.wrap) head.push({ g: new THREE.SphereGeometry(1, 14, 6, 0, TAU, PI * .52, PI * .34), m: TM(0, .078, .004, 0, 0, 0, .099, .112, .108), c: C.wrap });
   if (st.mask) head.push({ g: new THREE.SphereGeometry(1, 14, 6, 0, TAU, PI * .5, PI * .34), m: TM(0, .078, .004, 0, 0, 0, .099, .112, .108), c: C.mask });
   if (st.band) head.push({ g: new THREE.TorusGeometry(.096, .013, 5, 16), m: TM(0, .122, 0, PI / 2 + .12, 0, 0), c: C.band }, { g: new THREE.BoxGeometry(.03, .16, .008), m: TM(.03, .06, -.105, -.3, 0, .1), c: C.band });
@@ -1565,17 +1634,25 @@ function buildCharacter(kind) {
   // arms: long sleeves, leather bracers
   for (const s of [-1, 1]) {
     const ua = s < 0 ? rig.uaR : rig.uaL, fa = s < 0 ? rig.faR : rig.faL, h = s < 0 ? rig.hR : rig.hL;
-    add(ua, withC(limbGeo(D.upper, .059 * bk, .053 * bk), C.robe));
-    add(fa, [...withC(limbGeo(D.fore, .053 * bk, .043 * bk), C.robe), { g: new THREE.CylinderGeometry(.051 * bk, .046 * bk, .15, 10), m: TM(0, -.185, 0), c: C.bracer }, { g: new THREE.CylinderGeometry(.053 * bk, .053 * bk, .014, 10), m: TM(0, -.115, 0), c: C.trim }], kind === 'boss' ? M.armor : M.matte);
-    add(h, [{ ...ell(.04 * bk, .052, .034 * bk, 0, -.032, 0, 8, 6), c: kind === 'boss' || kind === 'elite' ? C.bracer : C.skin }]);
+    add(ua, withC(limbGeo(D.upper, .06 * bk, .052 * bk, .1, .38), C.robe));
+    add(fa, [...withC(limbGeo(D.fore, .052 * bk, .041 * bk, .16, .26), C.robe), { g: new THREE.CylinderGeometry(.051 * bk, .046 * bk, .15, 10), m: TM(0, -.185, 0), c: C.bracer }, { g: new THREE.CylinderGeometry(.056 * bk, .056 * bk, .02, 12), m: TM(0, -.112, 0), c: C.bracer }, { g: new THREE.CylinderGeometry(.05 * bk, .05 * bk, .016, 12), m: TM(0, -.255, 0), c: C.bracer }], kind === 'boss' ? M.armor : M.matte);
+    { const hc = kind === 'boss' || kind === 'elite' ? C.bracer : C.skin;   // palm, knuckles wrapped round the grip, thumb
+      add(h, [{ ...ell(.037 * bk, .05, .03 * bk, 0, -.03, 0, 8, 6), c: hc }, { ...ell(.034 * bk, .03, .036 * bk, 0, -.052, .014, 8, 6), c: hc }, { ...ell(.014 * bk, .026, .016 * bk, -s * .032 * bk, -.03, .018, 6, 5), c: hc }]); }
   }
   // legs
   for (const s of [-1, 1]) {
     const th = s < 0 ? rig.thR : rig.thL, sh = s < 0 ? rig.shR : rig.shL, ft = s < 0 ? rig.ftR : rig.ftL;
-    add(th, withC(limbGeo(D.thigh, .086 * bk, .066 * bk), C.pants));
-    add(sh, [...withC(limbGeo(D.shin, .062 * bk, .048 * bk), C.pants), { g: new THREE.CylinderGeometry(.064 * bk, .054 * bk, .26, 10), m: TM(0, -D.shin + .15, 0), c: C.boots }, { g: new THREE.CylinderGeometry(.066 * bk, .066 * bk, .016, 10), m: TM(0, -D.shin + .27, 0), c: C.bracer }]);
+    add(th, withC(limbGeo(D.thigh, .088 * bk, .064 * bk, .12, .3), C.pants));
+    add(sh, [...withC(limbGeo(D.shin, .06 * bk, .046 * bk, .22, .28), C.pants), { g: new THREE.CylinderGeometry(.064 * bk, .054 * bk, .26, 10), m: TM(0, -D.shin + .15, 0), c: C.boots }, { g: new THREE.CylinderGeometry(.066 * bk, .066 * bk, .016, 10), m: TM(0, -D.shin + .27, 0), c: C.bracer }]);
     if (kind === 'boss') add(sh, [{ g: new THREE.CylinderGeometry(.092, .074, .3, 10, 1, false, -PI * .5, PI), m: TM(0, -.2, .006), c: iron }], M.armor);
-    add(ft, [{ g: new THREE.CapsuleGeometry(.044, .15, 3, 8), m: TM(0, -.034, .06, PI / 2, 0, 0, 1.08, 1, .86), c: C.boots }]);
+    add(ft, [{ g: new THREE.CapsuleGeometry(.044, .15, 3, 8), m: TM(0, -.03, .06, PI / 2, 0, 0, 1.08 * bk, 1, .82), c: C.boots }, { g: new THREE.BoxGeometry(.088 * bk, .02, .245), m: TM(0, -.066, .058), c: dark }, { g: new THREE.BoxGeometry(.08 * bk, .03, .07), m: TM(0, -.06, -.035), c: dark }, { ...ell(.04 * bk, .028, .05, 0, -.03, .165, 8, 6), c: C.boots }]);
+  }
+  // scabbard slung at the left hip
+  if (st.weapon === 'jian' || st.weapon === 'dao') {
+    const jian = st.weapon === 'jian', L = jian ? .9 : .76, w = jian ? .021 : .03, a = 1.02, lac = col('#191310');
+    const M0 = TM(.2 * bk, .05 - Math.cos(a) * L / 2, .11 - Math.sin(a) * L / 2, a, 0, .1), at = (y, g, c, sz) => ({ g, m: M0.clone().multiply(TM(0, y, 0, 0, 0, 0, 1, 1, sz)), c });
+    add(rig.hips, [at(0, new THREE.CylinderGeometry(w, w * .82, L, 8), lac, .55), at(L / 2 - .02, new THREE.CylinderGeometry(w * 1.25, w * 1.25, .05, 8), bronze, .6), at(-L / 2 + .03, new THREE.CylinderGeometry(w * .95, w * .7, .07, 8), bronze, .55), at(L * .2, new THREE.CylinderGeometry(w * 1.2, w * 1.2, .022, 8), bronze, .6),
+      { g: new THREE.BoxGeometry(.012, .13, .03), m: TM(.185 * bk, .03, .075, .3, 0, .25), c: C.bracer }]);
   }
   // weapon
   const W = buildWeapon(st.weapon); rig.tipLen = W.tip; rig.baseLen = W.base; rig.gripL = W.grip;
@@ -1590,8 +1667,15 @@ function buildCharacter(kind) {
       prof: (f, o) => { const k = Math.pow(f, .6); o[0] = lerp(.08, .325, k); o[1] = lerp(.075, .225, k); },
       colorFn: (k, f, j) => { if (straw) { const v = .8 + .2 * hash2(j, 3) - .25 * f; return [v, v, v]; } const c = f > .85 ? ct : c2; return [c.r, c.g, c.b]; } })); }
   rig.skirt = rig.drapes[0];
-  if (st.scarf) rig.ribbons = [new Ribbon(rig, rig.chest, new V3(-.035, .27, -.1), { n: 8, seg: .12, width: .1, color: C.scarf, mat: M.cloth2 }), new Ribbon(rig, rig.chest, new V3(.04, .27, -.1), { n: 6, seg: .11, width: .085, color: C.scarf, mat: M.cloth2 })];
-  else rig.ribbons = [];
+  rig.ribbons = [];
+  if (st.scarf) rig.ribbons.push(new Ribbon(rig, rig.chest, new V3(-.035, .27, -.1), { n: 8, seg: .12, width: .1, color: C.scarf, mat: M.cloth2 }), new Ribbon(rig, rig.chest, new V3(.04, .27, -.1), { n: 6, seg: .11, width: .085, color: C.scarf, mat: M.cloth2 }));
+  // sash tails, pony tail and sword tassel: small cloth strips that give every move a little follow-through
+  const sashO = { n: 5, seg: .075, width: .05, color: C.sash, mat: M.cloth2, colBone: rig.hips, colR: .235 * bk, colOff: -.23, wind: .45, taper: .15 };
+  rig.ribbons.push(new Ribbon(rig, rig.spine, new V3(.085, -.04, .125), sashO)); if (kind !== 'bandit') rig.ribbons.push(new Ribbon(rig, rig.spine, new V3(.05, -.04, .13), { ...sashO, n: 4, seg: .07 }));
+  if (kind === 'player' || kind === 'elite') {
+    rig.ribbons.push(new Ribbon(rig, rig.head, new V3(0, .1, -.125), { n: 5, seg: .075, width: .055, color: C.hair, mat: M.cloth2, colR: .2, wind: .5, taper: .6 }));
+    rig.ribbons.push(new Ribbon(rig, rig.weapon, new V3(0, -.175, 0), { n: 4, seg: .055, width: .022, color: col('#9a2218'), mat: M.cloth2, colR: 0, wind: .4, taper: 0 }));
+  }
   return rig;
 }
 
@@ -1654,6 +1738,7 @@ class Drape {
 class Ribbon {
   constructor(rig, bone, anchor, o) {
     this.rig = rig; this.bone = bone; this.anchor = anchor; this.n = o.n; this.seg = o.seg; this.w = o.width;
+    this.colBone = o.colBone || rig.chest; this.colR = o.colR === undefined ? .17 : o.colR; this.windK = o.wind === undefined ? 1 : o.wind; this.taper = o.taper === undefined ? .35 : o.taper; this.colOff = o.colOff || 0;
     this.p = []; this.q = []; for (let i = 0; i < o.n; i++) { this.p.push(new V3()); this.q.push(new V3()); }
     const pos = new Float32Array(o.n * 6), cl = new Float32Array(o.n * 6), idx = [];
     for (let i = 0; i < o.n; i++) { const sh = 1 - .25 * (i % 2); for (let s = 0; s < 2; s++) { cl[(i * 2 + s) * 3] = o.color.r * sh; cl[(i * 2 + s) * 3 + 1] = o.color.g * sh; cl[(i * 2 + s) * 3 + 2] = o.color.b * sh; } }
@@ -1668,22 +1753,22 @@ class Ribbon {
     _a.copy(this.anchor).applyMatrix4(this.bone.matrixWorld);
     if (!this.inited || p[0].distanceToSquared(_a) > 9) { for (let i = 0; i < n; i++) { p[i].copy(_a); p[i].y -= i * this.seg * this.rig.s; q[i].copy(p[i]); } this.inited = true; }
     const t = GFX.time + this.ph, seg = this.seg * this.rig.s, gy = walkH(_a.x, _a.z) + .03;
-    _b.setFromMatrixPosition(this.rig.chest.matrixWorld);
+    _b.setFromMatrixPosition(this.colBone.matrixWorld); _b.y += this.colOff * this.rig.s; const wk = this.windK;
     p[0].copy(_a); q[0].copy(_a);
     for (let i = 1; i < n; i++) {
       const pi = p[i], vx = (pi.x - q[i].x) * .965, vy = (pi.y - q[i].y) * .965, vz = (pi.z - q[i].z) * .965; q[i].copy(pi);
-      const wv = 1.6 + Math.sin(t * 2.3 + i * .7) * 1.4;
+      const wv = (1.6 + Math.sin(t * 2.3 + i * .7) * 1.4) * wk;
       pi.x += vx + (wv * .9 + Math.sin(t * 5.1 + i) * .7) * dt * dt; pi.y += vy + (-7.5 + Math.sin(t * 3.7 + i * 1.3) * 1.8) * dt * dt; pi.z += vz + (wv * .45 + Math.cos(t * 4.3 + i) * .7) * dt * dt;
     }
     for (let it = 0; it < 3; it++) for (let i = 1; i < n; i++) {
       const a = p[i - 1], b = p[i]; _c.subVectors(b, a); const d = _c.length() || 1e-4; b.addScaledVector(_c, (seg - d) / d);
-      _c.subVectors(b, _b); const dc = _c.length(), rr2 = .17 * this.rig.s; if (dc < rr2) b.addScaledVector(_c, (rr2 - dc) / (dc || 1e-4));
+      _c.subVectors(b, _b); const dc = _c.length(), rr2 = this.colR * this.rig.s; if (dc < rr2) b.addScaledVector(_c, (rr2 - dc) / (dc || 1e-4));
       if (b.y < gy) b.y = gy;
     }
     const pos = this.geo.attributes.position.array, nor = this.geo.attributes.normal.array, cp = camera.position;
     for (let i = 0; i < n; i++) {
       const a = p[Math.max(0, i - 1)], b = p[Math.min(n - 1, i + 1)]; _c.subVectors(b, a).normalize(); _d.subVectors(cp, p[i]).normalize(); _e3.crossVectors(_c, _d);
-      if (_e3.lengthSq() < 1e-6) _e3.set(1, 0, 0); _e3.normalize(); const hw = this.w * .5 * this.rig.s * (1 - .35 * i / n);
+      if (_e3.lengthSq() < 1e-6) _e3.set(1, 0, 0); _e3.normalize(); const hw = this.w * .5 * this.rig.s * (1 - this.taper * i / n);
       const k = i * 6; pos[k] = p[i].x + _e3.x * hw; pos[k + 1] = p[i].y + _e3.y * hw; pos[k + 2] = p[i].z + _e3.z * hw; pos[k + 3] = p[i].x - _e3.x * hw; pos[k + 4] = p[i].y - _e3.y * hw; pos[k + 5] = p[i].z - _e3.z * hw;
       _f.crossVectors(_e3, _c).normalize(); if (_f.dot(_d) < 0) _f.negate(); _f.y += .4; _f.normalize();
       nor[k] = nor[k + 3] = _f.x; nor[k + 1] = nor[k + 4] = _f.y; nor[k + 2] = nor[k + 5] = _f.z;
@@ -1812,7 +1897,7 @@ class Trail {
   }
 }
 
-const FX = { shake: 0, shakeV: new V3(), hitstop: 0, slow: 0, slowScale: 1, numbers: [], waves: [] };
+const FX = { shake: 0, shakeV: new V3(), hitstop: 0, slow: 0, slowScale: 1, numbers: [], waves: [], kick: new V3(), kickV: new V3(), fovK: 0, fovKv: 0 };
 function initFX() {
   FX.add = new Particles(3600, true); FX.alp = new Particles(1400, false); FX.sparks = new Sparks(520); FX.spr = new SpritePool(36); FX.rings = new RingPool(10);
   const layer = $('dmg'); for (let i = 0; i < 26; i++) { const el = document.createElement('div'); el.className = 'dn'; layer.appendChild(el); FX.numbers.push({ el, life: 0, max: 1, p: new V3(), ox: 0 }); }
@@ -1840,11 +1925,16 @@ function fxBlood(pos, dir, n) {
 }
 function fxSplash(pos, n, up = 2.2) { for (let i = 0; i < n; i++) FX.alp.spawn(pos.x + rnd(-.1, .1), pos.y + .03, pos.z + rnd(-.1, .1), rnd(-1.2, 1.2), rnd(.6, up), rnd(-1.2, 1.2), rnd(.22, .5), rnd(.02, .05), .01, [.55, .64, .74], [.4, .48, .56], .5, 9, .6, 0); }
 function fxMist(pos, n, colr, sz = .5) { for (let i = 0; i < n; i++) FX.alp.spawn(pos.x + rnd(-.25, .25), pos.y + rnd(0, .4), pos.z + rnd(-.25, .25), rnd(-.8, .8), rnd(.1, .7), rnd(-.8, .8), rnd(.5, 1.1), sz * rnd(.6, 1), sz * 2.2, colr, colr, .16, -.2, 1.6, 0); }
-function fxHit(pos, dir, heavy) {
-  const sw = Math.atan2(dir.y, Math.hypot(dir.x, dir.z) * (Math.random() < .5 ? 1 : -1)) + rnd(-.5, .5);
-  FX.spr.spawn(TEX.streak, pos, { size: heavy ? 3.2 : 2.2, aspect: .2, life: .13, color: [1.7, 1.5, 1.3], rot: sw, grow: 1.5, depthTest: false });
+const _sa = { x: 0, y: 0 }, _sb = { x: 0, y: 0 }, _fxd = new V3();
+// on-screen angle of a world direction at a point (used to lay the slash flash along the cut)
+function screenAngle(pos, dir) { toScreen(pos, _sa); _fxv.copy(pos).addScaledVector(dir, .7); toScreen(_fxv, _sb); const dx = _sb.x - _sa.x, dy = _sb.y - _sa.y; return dx * dx + dy * dy < 9 ? rnd(-.7, .7) : Math.atan2(-dy, dx); }
+function fxHit(pos, dir, heavy, sw) {
+  const rot = sw ? screenAngle(pos, sw) : Math.atan2(dir.y, Math.hypot(dir.x, dir.z) * (Math.random() < .5 ? 1 : -1)) + rnd(-.5, .5);
+  if (sw) { _fxd.copy(sw).multiplyScalar(.85).addScaledVector(dir, .5); _fxd.y += .12; _fxd.normalize(); } else _fxd.copy(dir);
+  FX.spr.spawn(TEX.streak, pos, { size: heavy ? 3.6 : 2.5, aspect: .16, life: .14, color: [1.8, 1.6, 1.4], rot, grow: 1.5, depthTest: false });
+  if (heavy) FX.spr.spawn(TEX.streak, pos, { size: 5.4, aspect: .07, life: .21, color: [1.2, 1.1, 1.0], rot: rot + rnd(-.07, .07), grow: 1.3, depthTest: false });
   FX.spr.spawn(TEX.glow, pos, { size: heavy ? 1.5 : 1.0, life: .11, color: [1.6, 1.1, .9], grow: 1.8, depthTest: false });
-  fxBlood(pos, dir, heavy ? 22 : 12); fxSparks(pos, dir, heavy ? 8 : 4, [3, 1.6, .9], 6, .8);
+  fxBlood(pos, _fxd, heavy ? 26 : 14); fxSparks(pos, _fxd, heavy ? 8 : 4, [3, 1.6, .9], 6, .8);
 }
 function fxBlock(pos, dir) {
   FX.spr.spawn(TEX.glow, pos, { size: 1.1, life: .12, color: [2.2, 1.5, .8], grow: 1.6, depthTest: false });
@@ -1871,6 +1961,9 @@ function fxGlint(pos, red) {
 }
 function fxShock(pos, size, color) { _fxv.copy(pos); _fxv.y = walkH(pos.x, pos.z); FX.rings.spawn(_fxv, .6, size, .45, color); for (let i = 0; i < 26; i++) { const a = rnd(TAU), r = rnd(.2, size * .3); fxSplash(_fxs.set(_fxv.x + Math.cos(a) * r, _fxv.y, _fxv.z + Math.sin(a) * r), 1, 3.5); } fxMist(_fxv, 8, [.42, .5, .58], .7); }
 function addShake(a) { FX.shake = Math.min(1.4, FX.shake + a); }
+// directional camera impulse (world xz) and a quick field-of-view punch; both are springs resolved in updateCamera
+function camKick(x, z, a) { FX.kickV.x += x * a * 18; FX.kickV.z += z * a * 18; }
+function fovPunch(a) { FX.fovKv -= a * 46; }
 function hitStop(t) { FX.hitstop = Math.max(FX.hitstop, t); }
 function slowMo(t, scale) { FX.slow = t; FX.slowScale = scale; }
 function updateFX(dt, rdt) {
@@ -2057,10 +2150,12 @@ const GAME = { state: 'boot', time: 0, player: null, enemies: [], lock: null, to
   stats: { hits: 0, deflects: 0, blocks: 0, evades: 0, executions: 0, kills: 0, deaths: 0, damageTaken: 0, time: 0 } };
 const Input = { mx: 0, my: 0, sprint: false, guardHeld: false, keys: {}, buf: { attack: 0, dodge: 0, guard: 0, q: 0, e: 0, r: 0, exec: 0, heal: 0 },
   press(k) { this.buf[k] = .24; }, take(k) { if (this.buf[k] > 0) { this.buf[k] = 0; return true; } return false; }, tick(dt) { for (const k in this.buf) if (this.buf[k] > 0) this.buf[k] -= dt; } };
-const CAM = { yaw: 0, pitch: .2, dist: 4.3, pos: new V3(), look: new V3(), fov: 52, pivot: new V3(), cineK: 0 };
+const CAM = { yaw: 0, pitch: .2, dist: 4.3, pos: new V3(), look: new V3(), fov: 52, pivot: new V3(), pv: new V3(), cineK: 0, mdx: 0, mdy: 0, idleT: 9, sh: .5 };
 const DEFLECT_WINDOW = .2;
 const xpNeed = l => 100 + 80 * (l - 1);
-const _t1 = new V3(), _t2 = new V3(), _t3 = new V3();
+const _t1 = new V3(), _t2 = new V3(), _t3 = new V3(), _sw = new V3();
+// world-space direction the blade is travelling (falls back to the push direction for arts and thrusts)
+function swingOf(f, fallback) { const v = f.tipVel, l = v.length(); if (l > 4) return _sw.copy(v).multiplyScalar(1 / l); return _sw.copy(fallback).normalize(); }
 const dist2D = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
 const yawTo = (a, b) => Math.atan2(b.x - a.x, b.z - a.z);
 
@@ -2069,7 +2164,7 @@ class Fighter {
     this.kind = kind; const rig = this.rig = buildCharacter(kind); scene.add(rig.root); this.s = rig.s;
     this.pos = new V3(); this.yaw = 0; this.kb = new V3(); this.vel = new V3(); this.radius = .36 * this.s;
     this.state = 'idle'; this.st = 0; this.sub = 0; this.clip = null; this.ct = 0; this.animSpeed = 1; this.locoBase = P.relax;
-    this.phase = Math.random() * 6; this.moveSpeed = 0; this.mr = 0; this.mf = 1; this.run = 0; this.swordRun = false; this.dodgeAnim = false; this.dr = 0; this.df = 0; this.du = 0;
+    this.phase = Math.random(); this.mv = new V3(); this.yawRate = 0; this.prevYaw = 0; this.accF = 0; this.prevFs = 0; this.armsK = 1; this.tipVel = new V3(); this.prevTipW = new V3(); this.shakeT = 0; this.shakeA = 0; this.realSp = 0; this.ppx = 0; this.ppz = 0; this.moveSpeed = 0; this.mr = 0; this.mf = 1; this.run = 0; this.swordRun = false; this.dodgeAnim = false; this.dr = 0; this.df = 0; this.du = 0;
     this.trailCol = trailCol; this.trail = new Trail(trailCol); this.trailOn = false; this.alive = true; this.grounded = true; this.ghost = false; this.seed = Math.random() * 10;
     this.chest = new V3(); this.hp = 1; this.maxHp = 1; this.post = 0; this.maxPost = 1; this.postT = 9; this.isPlayer = false;
   }
@@ -2081,23 +2176,29 @@ class Fighter {
   flinch(ang, k) { const rel = wrapPi(ang - this.yaw), c = Math.cos(rel), s = Math.sin(rel), r = this.rig; r.kick('spP', -8 * k * c); r.kick('spR', 6 * k * s); r.kick('hipF', -2.2 * k * c); r.kick('hdP', -7 * k * c); }
   onStep(side) {
     const f = side ? this.rig.footR : this.rig.footL; _t3.copy(f).applyMatrix4(this.rig.root.matrixWorld);
-    sfx('step', { run: this.run > .4, vol: this.isPlayer ? 1 : .7 }, _t3); if (this.run > .25 || this.moveSpeed > 2.5) fxSplash(_t3, this.run > .6 ? 5 : 2, 1.6);
+    sfx('step', { run: this.run > .4, vol: (this.isPlayer ? 1 : .7) * (.55 + .45 * sat(this.moveSpeed / 3)) }, _t3); if (this.moveSpeed > 2.4) fxSplash(_t3, this.run > .6 ? 5 : 2, 1.6);
   }
   integrate(dt) {
     this.pos.x += (this.vel.x + this.kb.x) * dt; this.pos.z += (this.vel.z + this.kb.z) * dt;
-    const k = Math.exp(-7 * dt); this.kb.x *= k; this.kb.z *= k;
-    const sp = Math.hypot(this.vel.x, this.vel.z); this.moveSpeed = damp(this.moveSpeed, sp, 14, dt);
-    if (sp > .15) { const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw), f = (this.vel.x * fx + this.vel.z * fz) / sp, r = (this.vel.x * -fz + this.vel.z * fx) / sp; this.mf = damp(this.mf, f, 12, dt); this.mr = damp(this.mr, r, 12, dt); }
+    const k = Math.exp(-7 * dt), kbs = Math.hypot(this.kb.x, this.kb.z); this.kb.x *= k; this.kb.z *= k;
+    if (kbs > 2 && this.grounded && Math.random() < dt * 30) { _t3.copy(this.pos); fxSplash(_t3, 2, 1.2 + kbs * .12); }   // heels skid through the wet
+    const sp = Math.hypot(this.vel.x, this.vel.z), fx = Math.sin(this.yaw), fz = Math.cos(this.yaw), fs = this.vel.x * fx + this.vel.z * fz; this.moveSpeed = sp;
+    if (sp > .15) { const f = fs / sp, r = (this.vel.x * -fz + this.vel.z * fx) / sp; this.mf = damp(this.mf, f, 12, dt); this.mr = damp(this.mr, r, 12, dt); }
+    if (dt > 1e-4) { this.accF = damp(this.accF, clamp((fs - this.prevFs) / dt, -30, 30), 9, dt); this.yawRate = damp(this.yawRate, clamp(wrapPi(this.yaw - this.prevYaw) / dt, -12, 12), 12, dt); }
+    this.prevFs = fs; this.prevYaw = this.yaw;
   }
   animate(dt, rdt) {
     const rig = this.rig;
     if (this.clip) { this.ct += dt * this.animSpeed; clipEval(this.clip, this.ct, rig.tgt); }
     else if (this.dodgeAnim) dodgePose(rig.tgt, this.locoBase, this.dr, this.df, this.du);
     else {
-      const sp = this.moveSpeed / this.s, A = lerp(.15, .43, this.run) * sat(sp / 1.4);
-      if (A > .02) { const k0 = Math.floor(this.phase / PI); this.phase += dt * PI * sp / (2 * A); const k1 = Math.floor(this.phase / PI); if (k1 !== k0) this.onStep(k1 & 1); }
-      locoPose(rig.tgt, this.locoBase, { speed: sp, run: this.run, phase: this.phase, mr: this.mr, mf: this.mf, t: GAME.time + this.seed, swordRun: this.swordRun });
+      // animate from the speed actually achieved, so feet do not run in place against a wall or a body
+      const sp = Math.min(this.moveSpeed, this.realSp + .25) / this.s; gaitParams(sp, this.mr, this.mf, GP); this.run = GP.r;
+      const adv = (GP.fc * smooth(.03, .4, sp) + 1.8 * sat((Math.abs(this.yawRate) - 1.2) / 3) * (1 - smooth(.05, .8, sp))) * dt;
+      if (adv > 0) { const p0 = this.phase; let p1 = p0 + adv; if (p1 >= 1) { p1 -= 1; this.onStep(0); } else if (p0 < .5 && p1 >= .5) this.onStep(1); this.phase = p1; }
+      locoPose(rig.tgt, this.locoBase, { speed: sp, phase: this.phase, mr: this.mr, mf: this.mf, t: GAME.time + this.seed, swordRun: this.swordRun, arms: this.armsK, turn: this.yawRate, acc: this.accF / this.s });
     }
+    if (dt > 1e-4) this.realSp = damp(this.realSp, Math.min(12, Math.hypot(this.pos.x - this.ppx, this.pos.z - this.ppz) / dt), 18, dt); this.ppx = this.pos.x; this.ppz = this.pos.z;
     this.pos.y = damp(this.pos.y, walkH(this.pos.x, this.pos.z), 18, Math.max(dt, rdt * .2));
     if (this.grounded) {
       const yy = this.yaw + rig.pose.spin, s = Math.sin(yy), c = Math.cos(yy), sc = this.s, pl = rig.pose.lf, pr = rig.pose.rf;
@@ -2105,7 +2206,10 @@ class Fighter {
       lx = -pr[0] * sc; lz = pr[2] * sc; rig.gRt = clamp((walkH(this.pos.x + lx * c + lz * s, this.pos.z - lx * s + lz * c) - this.pos.y) / sc, -.3, .32);
     } else rig.gLt = rig.gRt = 0;
     rig.update(dt);
-    rig.root.position.copy(this.pos); rig.root.rotation.y = this.yaw + rig.pose.spin; rig.finish();
+    rig.root.position.copy(this.pos); rig.root.rotation.y = this.yaw + rig.pose.spin;
+    if (this.shakeT > 0) { this.shakeT -= rdt; const a = this.shakeA * sat(this.shakeT / .1); rig.root.position.x += (Math.random() - .5) * a; rig.root.position.z += (Math.random() - .5) * a; }
+    rig.finish();
+    if (dt > 1e-4) { _t3.subVectors(rig.tipW, this.prevTipW).multiplyScalar(1 / dt); if (_t3.lengthSq() < 6400) this.tipVel.lerp(_t3, .55); } this.prevTipW.copy(rig.tipW);
     this.chest.setFromMatrixPosition(rig.chest.matrixWorld);
     for (const d of rig.drapes) d.update(Math.max(dt, .002)); for (const r of rig.ribbons) r.update(Math.max(dt, rdt * .15));
     this.trail.update(dt, rig.baseW, rig.tipW, this.trailOn);
@@ -2115,11 +2219,11 @@ class Fighter {
 
 // ---------------------------------------------------------------- player
 const PATK = [
-  { clip: 'a1', dmg: 19, post: 10, range: 2.35, arc: 1.25, lunge: [.02, .18, .95], cancel: .24, stop: .05, kbv: 2.2 },
-  { clip: 'a2', dmg: 19, post: 10, range: 2.35, arc: 1.35, lunge: [.02, .17, .75], cancel: .24, stop: .05, kbv: 2.2 },
+  { clip: 'a1', dmg: 19, post: 10, range: 2.35, arc: 1.25, lunge: [.02, .18, .95], cancel: .24, stop: .045, kbv: 2.2 },
+  { clip: 'a2', dmg: 19, post: 10, range: 2.35, arc: 1.35, lunge: [.02, .17, .75], cancel: .24, stop: .045, kbv: 2.2 },
   { clip: 'a3', dmg: 22, post: 12, range: 2.4, arc: 1.15, lunge: [.03, .19, .9], cancel: .27, stop: .06, kbv: 2.6 },
   { clip: 'a4', dmg: 26, post: 15, range: 2.8, arc: .5, lunge: [.05, .2, 1.5], cancel: .30, stop: .07, kbv: 3.6 },
-  { clip: 'a5', dmg: 38, post: 24, range: 2.65, arc: .9, lunge: [.14, .36, 1.7], cancel: .54, stop: .11, kbv: 5, heavy: true, kd: true },
+  { clip: 'a5', dmg: 38, post: 24, range: 2.65, arc: .9, lunge: [.14, .36, 1.7], cancel: .54, stop: .12, kbv: 5, heavy: true, kd: true },
 ];
 const PDASH = { clip: 'dash', dmg: 30, post: 16, range: 2.95, arc: .55, lunge: [.03, .22, 3.0], cancel: .36, stop: .08, kbv: 4, dash: true };
 const SK = { q: { dmg: 48, post: 28, stop: .1, kbv: 4, heavy: true, pierce: .4 }, e1: { dmg: 24, post: 15, stop: .05, kbv: 2.5, pierce: .6 }, e2: { dmg: 30, post: 18, stop: .08, kbv: 6, pierce: .6, kd: true, heavy: true }, r: { dmg: 58, post: 32, stop: .09, kbv: 5, heavy: true, pierce: 0 } };
@@ -2140,6 +2244,10 @@ class Player extends Fighter {
   nearestThreat(r) { let best = null, bd = r; for (const e of GAME.enemies) { if (!e.alive || !e.aggro) continue; const d = dist2D(e.pos, this.pos); if (d < bd) { bd = d; best = e; } } return best; }
   blockedAhead(r) { for (const e of GAME.enemies) { if (!e.alive) continue; const d = dist2D(e.pos, this.pos); if (d < r + e.radius && Math.abs(wrapPi(yawTo(this.pos, e.pos) - this.yaw)) < 1.0) return true; } return false; }
   execTarget() { let best = null, bd = 3.4; for (const e of GAME.enemies) if (e.alive && e.state === 'broken') { const d = dist2D(e.pos, this.pos) - e.radius; if (d < bd) { bd = d; best = e; } } return best; }
+  steer(tx, tz, dt) {
+    const m = this.mv, cur = Math.hypot(m.x, m.z), tgt = Math.hypot(tx, tz), dot = cur > .2 && tgt > .2 ? (m.x * tx + m.z * tz) / (cur * tgt) : 1;
+    const k = tgt < .05 ? 10.5 : dot < -.2 ? 16 : tgt > cur ? 8.5 : 11; m.x = damp(m.x, tx, k, dt); m.z = damp(m.z, tz, k, dt); this.vel.set(m.x, 0, m.z); this.steered = true;
+  }
   toFree() { this.setState('free'); this.toLoco(this.combatT > 0 || GAME.lock ? P.guard : P.relax, .16); this.ghost = false; this.grounded = true; }
   tryActions(a, wish, lock) {
     const I = Input;
@@ -2155,6 +2263,9 @@ class Player extends Fighter {
     const def = idx < 0 ? PDASH : PATK[idx]; this.atk = def; this.combo = idx < 0 ? 0 : idx; this.hitSet.clear(); this.queued = false; this.swung = false;
     this.setState('attack'); this.play(PC[def.clip], .06); this.combatT = 6; this.ghost = false;
     this.aim = lock || this.softTarget(wish); this.yawT = this.aim ? yawTo(this.pos, this.aim.pos) : (wish !== null ? wish : this.yaw);
+    // close the gap: stretch (or shorten) the step so the blade actually arrives
+    this.lungeD = def.lunge[2]; this.slamFx = false;
+    if (this.aim) { const gap = dist2D(this.aim.pos, this.pos) - this.aim.radius - this.radius - .5, reach = def.lunge[2] * 1.9 + .7; if (gap < reach) this.lungeD = clamp(gap, .12, reach); }
   }
   sweep(a) {
     for (const e of GAME.enemies) {
@@ -2192,39 +2303,42 @@ class Player extends Fighter {
     p.iframe = Math.max(0, p.iframe - dt); p.deflectT = Math.max(0, p.deflectT - dt); p.blockStun = Math.max(0, p.blockStun - dt); p.combatT = Math.max(0, p.combatT - dt);
     for (const k in p.cd) p.cd[k] = Math.max(0, p.cd[k] - dt);
     p.postT += dt; if (p.postT > 1.3 && p.state !== 'broken') p.post = Math.max(0, p.post - (p.state === 'guard' ? 28 : 16) * dt);
-    p.trailOn = false; p.armor = false; p.vel.set(0, 0, 0);
-    if (!p.alive) { p.integrate(dt); return; }
+    p.trailOn = false; p.armor = false; p.vel.set(0, 0, 0); p.steered = false;
+    if (!p.alive) { p.mv.set(0, 0, 0); p.integrate(dt); return; }
     let wx = 0, wz = 0, wish = null; const il = Math.hypot(I.mx, I.my);
     if (il > .15) { const cy = CAM.yaw, fx = Math.sin(cy), fz = Math.cos(cy); wx = (fx * I.my - fz * I.mx) / il; wz = (fz * I.my + fx * I.mx) / il; wish = Math.atan2(wx, wz); }
     const lock = (GAME.lock && GAME.lock.alive) ? GAME.lock : null;
     p.guardFresh = false;
-    if (I.buf.guard > 0) { I.buf.guard = 0; p.deflectT = (GAME.time - p.lastGuardPress < .38) ? .11 : DEFLECT_WINDOW; p.lastGuardPress = GAME.time; p.guardFresh = true; }
+    if (I.buf.guard > 0) { I.buf.guard = 0; p.deflectT = (GAME.time - p.lastGuardPress < .38) ? .11 : DEFLECT_WINDOW; p.lastGuardPress = GAME.time; p.guardFresh = true;
+      // a small glint on the blade marks the moment the deflect window opens
+      if (p.state !== 'execute' && p.state !== 'down' && p.state !== 'broken') { _t1.copy(p.rig.baseW).lerp(p.rig.tipW, .55); FX.spr.spawn(TEX.star, _t1, { size: .7, life: .13, color: [1.6, 1.9, 2.3], rot: PI / 4, grow: .5, depthTest: false }); sfx('glint', { vol: .3 }); } }
     if (p.nearestThreat(15)) p.combatT = Math.max(p.combatT, 2.5);
     switch (p.state) {
       case 'free': {
         const base = (p.combatT > 0 || lock) ? P.guard : P.relax; if (base !== p.locoBase || p.clip) p.toLoco(base, .3);
-        const sprint = I.sprint && wish !== null, sp = wish === null ? 0 : sprint ? 6.5 : (lock ? 3.7 : 4.1);
-        p.vel.set(wx * sp, 0, wz * sp); p.run = damp(p.run, smooth(3.0, 6.2, p.moveSpeed), 10, dt); p.swordRun = base === P.relax || sprint;
+        const sprint = I.sprint && wish !== null, sp = wish === null ? 0 : sprint ? 6.4 : (lock ? 3.6 : 4.0);
+        p.steer(wx * sp, wz * sp, dt); p.swordRun = base === P.relax || sprint; p.armsK = damp(p.armsK, p.swordRun ? 1 : .3, 6, dt);
         if (lock && !sprint) p.faceTo(lock.pos, 14, dt); else if (wish !== null) p.yaw = angDamp(p.yaw, wish, 13, dt);
         p.tryActions({ exec: 1, dodge: 1, guard: 1, guardHold: 1, skill: 1, heal: 1, attack: 1, dash: sprint && p.moveSpeed > 5.4 }, wish, lock);
         break; }
       case 'attack': {
         const a = p.atk, t = p.st;
         if (t < a.hit[0] + .02) { if (p.aim && p.aim.alive) p.yawT = yawTo(p.pos, p.aim.pos); p.yaw = angDamp(p.yaw, p.yawT, 22, dt); }
-        if (t >= a.lunge[0] && t < a.lunge[1] && !p.blockedAhead(1.2)) { const sp = a.lunge[2] / (a.lunge[1] - a.lunge[0]); p.vel.set(Math.sin(p.yaw) * sp, 0, Math.cos(p.yaw) * sp); }
+        if (t >= a.lunge[0] && t < a.lunge[1] && !p.blockedAhead(1.12)) { const T = a.lunge[1] - a.lunge[0], sp = p.lungeD / T * 1.5708 * Math.sin(PI * (t - a.lunge[0]) / T); p.vel.set(Math.sin(p.yaw) * sp, 0, Math.cos(p.yaw) * sp); }
+        if (a.heavy && !p.slamFx && t >= a.hit[1] - .03) { p.slamFx = true; const tp = p.rig.tipW; _t1.set(tp.x, walkH(tp.x, tp.z), tp.z); fxSplash(_t1, 16, 3); fxSparks(_t1.setY(_t1.y + .08), _t2.set(Math.sin(p.yaw) * .3, 1, Math.cos(p.yaw) * .3), 10, [3.5, 2.2, 1], 6, 1.1); FX.rings.spawn(_t1, .4, 3.2, .3, [.9, 1.1, 1.3]); addShake(.22); p.rig.kick('hipU', -1.1); sfx('fall', { vol: .6 }); }
         if (!p.swung && t >= a.hit[0] - .06) { p.swung = true; sfx('swing', { heavy: a.heavy, pitch: 1 + p.combo * .07 }); }
         p.trailOn = t >= a.hit[0] - .07 && t <= a.hit[1] + .05;
         if (t >= a.hit[0] && t <= a.hit[1]) p.sweep(a);
         if (I.buf.attack > 0 && !p.execTarget()) { p.queued = true; I.buf.attack = 0; }
         if (p.tryActions({ dodge: 1, guard: 1, exec: t >= a.cancel }, wish, lock)) break;
-        if (t >= a.cancel) { if (p.tryActions({ skill: 1 }, wish, lock)) break; if (p.queued) { p.startAttack(a.dash ? 1 : (p.combo + 1) % PATK.length, wish, lock); break; } }
+        if (t >= a.cancel) { if (p.tryActions({ skill: 1 }, wish, lock)) break; if (p.queued) { p.startAttack(a.dash ? 1 : (p.combo + 1) % PATK.length, wish, lock); break; } if (wish !== null && t >= a.cancel + .13) { p.toFree(); break; } }
         if (p.clipDone()) p.toFree();
         break; }
       case 'guard': {
         if (p.clip && p.clipDone()) p.toLoco(P.block, .08);
         if (!I.guardHeld && p.blockStun <= 0 && p.st > .2) { p.toFree(); break; }
         const th = lock || p.nearestThreat(7.5); if (th) p.faceTo(th.pos, 16, dt); else if (wish !== null) p.yaw = angDamp(p.yaw, wish, 10, dt);
-        p.vel.set(wx * 1.9, 0, wz * 1.9); p.run = damp(p.run, 0, 10, dt); p.swordRun = false;
+        p.steer(wx * 1.9, wz * 1.9, dt); p.swordRun = false; p.armsK = 0;
         if (p.tryActions({ dodge: 1 }, wish, lock)) break;
         if (p.blockStun <= 0) p.tryActions({ exec: 1, attack: 1, skill: 1 }, wish, lock);
         break; }
@@ -2254,7 +2368,7 @@ class Player extends Fighter {
       case 'quick': { const u = sat(p.st / .4), sp = 9 * (1 - u); p.vel.set(p.dv.x * sp, 0, p.dv.z * sp); if (p.clipDone()) p.toFree(); else if (p.st > .3) p.tryActions({ dodge: 1, guard: 1, guardHold: 1, attack: 1 }, wish, lock); break; }
       case 'broken': { if (p.st >= 1.15) { p.post = 0; p.toFree(); } break; }
       case 'heal': {
-        p.vel.set(wx * 1.1, 0, wz * 1.1);
+        p.steer(wx * 1.1, wz * 1.1, dt);
         if (!p.healed && p.st >= .5) { p.healed = true; p.gourds--; const amt = Math.round(p.maxHp * .45); p.hp = Math.min(p.maxHp, p.hp + amt); sfx('heal'); fxNumber(p.chest, '+' + amt, 'txt'); for (let i = 0; i < 26; i++) FX.add.spawn(p.pos.x + rnd(-.4, .4), p.pos.y + rnd(.1, 1.4), p.pos.z + rnd(-.4, .4), rnd(-.2, .2), rnd(.5, 1.5), rnd(-.2, .2), rnd(.5, 1.1), rnd(.04, .07), 0, [1.4, 2.4, .9], [.3, .8, .2], .9, -.2, 1, 1.2); }
         if (p.tryActions({ dodge: 1 }, wish, lock)) break; if (p.clipDone()) p.toFree();
         break; }
@@ -2301,6 +2415,7 @@ class Player extends Fighter {
         if (t >= 1.9) { p.iframe = .35; uiCine(false); GAME.cine = null; p.trail.setColor(p.trailCol); p.toFree(); }
         break; }
     }
+    if (!p.steered) p.mv.set(p.vel.x, 0, p.vel.z);
     p.integrate(dt);
   }
 }
@@ -2335,10 +2450,12 @@ function playerStrike(e, a, p, from) {
   if (res === 'hit') {
     const broken = e.state === 'broken', dmg = Math.round(a.dmg * p.dmgMul * rnd(.92, 1.08) * (broken ? 1.35 : 1) * (e.state === 'recoil' ? 1.15 : 1));
     e.hp -= dmg; if (!broken) { e.post = Math.min(e.maxPost, e.post + a.post); e.postT = 0; }
-    e.rig.U.hit.value = 1; e.flinch(ang, a.heavy ? 1.6 : 1); const kv = (a.kbv || 2) * (e.def.boss ? .25 : 1); e.kb.set(dir.x * kv, 0, dir.z * kv);
-    fxHit(hp, dir, a.heavy); sfx('hit', { heavy: a.heavy }, hp); hitStop(a.stop || .05); addShake(a.heavy ? .45 : .22); fxNumber(hp, String(dmg), a.heavy ? 'big' : '');
+    e.rig.U.hit.value = 1; e.flinch(ang, a.heavy ? 1.6 : 1); e.rig.kick('spY', (Math.random() < .5 ? -3 : 3)); if (a.heavy && !e.def.boss) e.rig.kick('hipU', 1.7);
+    const kv = (a.kbv || 2) * (e.def.boss ? .25 : 1); e.kb.set(dir.x * kv, 0, dir.z * kv); e.shakeT = (a.stop || .05) + .1; e.shakeA = a.heavy ? .075 : .042;
+    fxHit(hp, dir, a.heavy, swingOf(p, dir)); sfx('hit', { heavy: a.heavy }, hp); hitStop(a.stop || .05); addShake(a.heavy ? .4 : .17); camKick(dir.x, dir.z, a.heavy ? .15 : .06); if (a.heavy) fovPunch(1);
+    fxNumber(hp, String(dmg), a.heavy ? 'big' : '');
     GAME.stats.hits++; e.hitChain++; e.chainT = 1.3;
-    if (e.hp <= 0) { if (e.pips > 1) { e.hp = 1; e.doBreak(); } else e.die(ang, a); }
+    if (e.hp <= 0) { if (e.pips > 1) { e.hp = 1; e.doBreak(); } else { e.die(ang, a); hitStop(Math.max(.1, (a.stop || .05) + .05)); slowMo(.24, .4); fovPunch(.9); fxBlood(hp, _sw, 18); } }
     else if (broken) { /* keeps kneeling */ }
     else if (e.post >= e.maxPost) e.doBreak();
     else if (a.kd && !e.def.boss && !(e.def.armorAtk && e.state === 'attack')) e.knockdown();
@@ -2347,7 +2464,7 @@ function playerStrike(e, a, p, from) {
     e.post = Math.min(e.maxPost, e.post + a.post * 1.2); e.postT = 0; e.rig.kick('spP', -3.5); e.rig.kick('hipF', -1.2); e.kb.set(dir.x * 1.4, 0, dir.z * 1.4);
     if (e.state !== 'guard') { e.setState('guard'); e.play(e.C.block, .05); } e.st = 0; e.guardDur = rnd(.55, .8); e.guardCount++;
     if (e.guardCount >= e.counterAt) { e.wantCounter = true; e.guardCount = 0; e.counterAt = 1 + ((Math.random() * 3) | 0); e.guardDur = .28; }
-    fxBlock(hp, dir); sfx('block', null, hp); hitStop(.03); addShake(.14); fxNumber(hp, 'GUARD', 'txt');
+    fxBlock(hp, dir); sfx('block', null, hp); hitStop(.03); addShake(.12); camKick(-dir.x, -dir.z, .04); e.shakeT = .1; e.shakeA = .025; fxNumber(hp, 'GUARD', 'txt');
     if (e.post >= e.maxPost) e.doBreak();
   } else {
     e.post = Math.min(e.maxPost, e.post + a.post * .45); e.postT = 0; if (e.state !== 'guard') { e.setState('guard'); e.play(e.C.block, .04); } e.st = 0; e.guardDur = .2; e.wantCounter = true;
@@ -2368,17 +2485,17 @@ function enemyStrike(e, h) {
   if (!h.unblock && facing && p.state === 'guard' && p.deflectT > 0) {
     p.deflectT = 0; p.st = 0; p.play((p.deflSide ^= 1) ? PC.deflA : PC.deflB, .03); p.post = Math.max(0, p.post - 8);
     e.post = Math.min(e.maxPost, e.post + Math.max(12, (h.post || 20) * (e.def.boss ? .62 : e.def.armorAtk ? 1.0 : 1.3))); e.postT = 0; e.kb.set(-nx * 1.6, 0, -nz * 1.6);
-    fxDeflect(cp, _t3.set(-nx, .3, -nz)); sfx('deflect'); hitStop(.085); addShake(.36); Post.u.flash = .1; Post.u.chroma = 1; fxNumber(cp, 'DEFLECT', 'txt'); GAME.stats.deflects++;
+    fxDeflect(cp, _t3.set(-nx, .3, -nz)); sfx('deflect'); hitStop(.085); slowMo(.16, .4); addShake(.34); camKick(nx, nz, .09); fovPunch(.8); Post.u.flash = .1; Post.u.chroma = 1; fxNumber(cp, 'DEFLECT', 'txt'); GAME.stats.deflects++; e.shakeT = .2; e.shakeA = .05;
     for (const k in p.cd) p.cd[k] = Math.max(0, p.cd[k] - .5);
     if (e.post >= e.maxPost) e.doBreak(); else if (h.recoil || !(e.def.boss || e.def.armorAtk)) { e.setState('recoil'); e.play(e.C.recoil, .05); }
   } else if (!h.unblock && facing && p.state === 'guard') {
     p.post = Math.min(p.maxPost, p.post + (h.post || 0) + (h.heavy ? 8 : 0)); p.postT = 0; p.blockStun = .22; p.rig.kick('spP', -4.5); p.rig.kick('hipF', -1.8); p.kb.set(nx * 2.8, 0, nz * 2.8);
-    fxBlock(cp, _t3.set(-nx, .3, -nz)); sfx('block'); hitStop(.035); addShake(.22); GAME.stats.blocks++; fxNumber(cp, 'GUARD', 'txt');
+    fxBlock(cp, _t3.set(-nx, .3, -nz)); sfx('block'); hitStop(.035); addShake(.2); camKick(nx, nz, h.heavy ? .16 : .09); p.shakeT = .12; p.shakeA = .03; GAME.stats.blocks++; fxNumber(cp, 'GUARD', 'txt');
     if (p.post >= p.maxPost) p.doBreak();
   } else {
     const dmg = Math.round(h.dmg * rnd(.94, 1.06) * (p.state === 'broken' ? 1.25 : 1)); p.hp -= dmg; p.post = Math.min(p.maxPost, p.post + (h.post || 0) * .4); p.postT = 0;
     p.rig.U.hit.value = 1; p.flinch(back, 1.3); const kv = h.kd ? 7.5 : 3.2; p.kb.set(nx * kv, 0, nz * kv);
-    fxHit(cp, away, h.heavy || h.kd); sfx('hurt'); hitStop(.07); addShake(h.kd ? .7 : .45); Post.u.hurt = 1; fxNumber(p.chest, '-' + dmg, 'pl'); GAME.stats.damageTaken += dmg;
+    fxHit(cp, away, h.heavy || h.kd, swingOf(e, away)); sfx('hurt'); hitStop(.07); addShake(h.kd ? .6 : .38); camKick(nx, nz, h.kd ? .34 : .2); p.shakeT = .17; p.shakeA = .05; Post.u.hurt = 1; fxNumber(p.chest, '-' + dmg, 'pl'); GAME.stats.damageTaken += dmg;
     if (h.unblock && p.state === 'guard') fxNumber(cp, 'UNBLOCKABLE', 'txt');
     if (p.hp <= 0) { p.hp = 0; p.yaw = back; p.die(); }
     else if (p.armor) { /* art in motion: no stagger */ }
@@ -2528,6 +2645,8 @@ class Enemy extends Fighter {
         }
         break; }
     }
+    if (e.state === 'approach' || e.state === 'circle') { e.mv.x = damp(e.mv.x, e.vel.x, 6.5, dt); e.mv.z = damp(e.mv.z, e.vel.z, 6.5, dt); e.vel.set(e.mv.x, 0, e.mv.z); } else e.mv.set(e.vel.x, 0, e.vel.z);
+    e.armsK = e.state === 'approach' && !e.def.boss && e.kind !== 'spear' ? .6 : 0;
     e.integrate(dt);
   }
   tryAttack(dist) {
@@ -2641,7 +2760,7 @@ function initInput() {
   window.addEventListener('wheel', ev => { if (GAME.state === 'play' && GAME.lock) setLockTarget(1); }, { passive: true });
   window.addEventListener('mousemove', ev => {
     if (GAME.state !== 'play' && GAME.state !== 'dead') return; if (!GAME.locked && !(GAME.noLock && ev.buttons)) return;
-    const k = GAME.lock ? .35 : 1; CAM.yaw -= ev.movementX * .0024 * k; CAM.pitch = clamp(CAM.pitch + ev.movementY * .002 * k, -.42, 1.05);
+    const k = GAME.lock ? .35 : 1; CAM.mdx += ev.movementX * .0024 * k; CAM.mdy += ev.movementY * .002 * k; CAM.idleT = 0;
   });
   document.addEventListener('pointerlockchange', () => { GAME.locked = document.pointerLockElement === canvas; if (GAME.locked) { GAME.lockFails = 0; setPaused(false); } else if (GAME.state === 'play' && !GAME.noLock) setPaused(true); });
   document.addEventListener('pointerlockerror', lockFailed);
@@ -2656,36 +2775,56 @@ function setPaused(on) { if (GAME.paused === on) return; GAME.paused = on; $('pa
 
 // ---------- camera ----------
 const _cp = new V3(), _cl = new V3(), _cq = new V3();
+// implicit critically-damped spring step (stable at any dt)
+function springTo(obj, vel, key, target, w, dt) { const x = obj[key], v = vel[key], f = 1 + 2 * dt * w, hww = dt * w * w, di = 1 / (f + dt * hww); obj[key] = (f * x + dt * v + dt * hww * target) * di; vel[key] = (v + hww * (target - x)) * di; }
 function updateCamera(rdt) {
-  const p = GAME.player, lock = (GAME.lock && GAME.lock.alive) ? GAME.lock : null; let fovT = 52;
+  const p = GAME.player, C = CAM, lock = (GAME.lock && GAME.lock.alive) ? GAME.lock : null; let fovT = 50;
   if (GAME.freeCam) { const f = GAME.freeCam; camera.position.set(f[0], f[1], f[2]); camera.lookAt(_cl.set(f[3], f[4], f[5])); camera.fov = f[6] || 40; camera.updateProjectionMatrix(); return; }
   if (GAME.state === 'title') {
     const t = GFX.time * .08; camera.position.set(pathX(-1) + Math.sin(t) * 1.2 + 1.5, 1.55 + Math.sin(t * 1.7) * .15, -1.2 + Math.cos(t) * .5); _cl.set(pathX(14), 2.6, 16); camera.lookAt(_cl); camera.fov = 50; camera.updateProjectionMatrix(); return;
   }
-  CAM.pivot.x = damp(CAM.pivot.x, p.pos.x, 16, rdt); CAM.pivot.z = damp(CAM.pivot.z, p.pos.z, 16, rdt); CAM.pivot.y = damp(CAM.pivot.y, p.pos.y + 1.5, 9, rdt);
-  if (lock && !GAME.cine) { CAM.yaw = angDamp(CAM.yaw, yawTo(p.pos, lock.pos), 5.5, rdt); CAM.pitch = damp(CAM.pitch, clamp(.2 + (p.pos.y - lock.pos.y) * .07, .02, .5), 2.5, rdt); }
-  if (GAME.state === 'dead') { CAM.yaw += rdt * .12; CAM.pitch = damp(CAM.pitch, .5, 1, rdt); }
-  const far = GAME.bossOn ? 5.7 : (p.combatT > 0 ? 4.9 : 4.3) + (Input.sprint ? .3 : 0) + (GAME.state === 'dead' ? 1.5 : 0); CAM.dist = damp(CAM.dist, far, 3, rdt);
-  const fx = Math.sin(CAM.yaw), fz = Math.cos(CAM.yaw), cp = Math.cos(CAM.pitch), sp = Math.sin(CAM.pitch), sh = .55;
+  // mouse look: each delta is spread over a few frames, which removes sensor jitter without adding felt lag
+  { const take = 1 - Math.exp(-42 * rdt); C.yaw -= C.mdx * take; C.pitch = clamp(C.pitch + C.mdy * take, -.42, 1.05); C.mdx *= 1 - take; C.mdy *= 1 - take; C.idleT += rdt; }
+  const sp = p.moveSpeed, play = GAME.state === 'play' && !GAME.cine;
+  // follow point: spring toward the player plus a little velocity look-ahead, so starts and stops ease in
+  C.lax = damp(C.lax || 0, clamp(p.vel.x * .07, -.5, .5), 7, rdt); C.laz = damp(C.laz || 0, clamp(p.vel.z * .07, -.5, .5), 7, rdt);
+  springTo(C.pivot, C.pv, 'x', p.pos.x + C.lax, 15, rdt); springTo(C.pivot, C.pv, 'z', p.pos.z + C.laz, 15, rdt); springTo(C.pivot, C.pv, 'y', p.pos.y + 1.5, 8, rdt);
+  if (lock && !GAME.cine) { C.yaw = angDamp(C.yaw, yawTo(p.pos, lock.pos), 4.6, rdt); C.pitch = damp(C.pitch, clamp(.2 + (p.pos.y - lock.pos.y) * .07, .02, .5), 2.5, rdt); }
+  else if (play && C.idleT > .9 && sp > 1.5) {
+    // hands off the mouse: drift round behind the direction of travel and tilt to the slope ahead
+    const w = Math.min(1, C.idleT - .9), dy = wrapPi(Math.atan2(p.vel.x, p.vel.z) - C.yaw); C.yaw += Math.sin(dy) * w * .6 * sat(sp / 4) * rdt;
+    const sl = (walkH(p.pos.x + Math.sin(C.yaw) * 3, p.pos.z + Math.cos(C.yaw) * 3) - walkH(p.pos.x - Math.sin(C.yaw) * 1.5, p.pos.z - Math.cos(C.yaw) * 1.5)) / 4.5;
+    C.pitch = damp(C.pitch, clamp(.17 - sl * .4, .0, .42), .8 * w, rdt);
+  }
+  if (GAME.state === 'dead') { C.yaw += rdt * .12; C.pitch = damp(C.pitch, .5, 1, rdt); }
+  const far = (GAME.bossOn ? 5.6 : p.combatT > 0 ? 4.8 : 4.2) + .45 * smooth(4.6, 6.4, sp) + (GAME.state === 'dead' ? 1.5 : 0); C.dist = damp(C.dist, far, 2.4, rdt);
+  C.sh = damp(C.sh, lock ? .72 : .5, 3, rdt);
+  const fx = Math.sin(C.yaw), fz = Math.cos(C.yaw), cp = Math.cos(C.pitch), sn = Math.sin(C.pitch), sh = C.sh;
   // pull the camera in if terrain blocks the boom
-  let d = CAM.dist;
-  for (let k = 1; k <= 6; k++) { const dd = CAM.dist * k / 6, x = CAM.pivot.x - fx * cp * dd - fz * sh * (k / 6), z = CAM.pivot.z - fz * cp * dd + fx * sh * (k / 6), y = CAM.pivot.y + sp * dd; if (y < groundH(x, z) + .32) { d = Math.max(1.2, CAM.dist * (k - 1) / 6); break; } }
-  CAM.dEff = damp(CAM.dEff || d, d, d < (CAM.dEff || d) ? 20 : 4, rdt); d = CAM.dEff;
-  _cp.set(CAM.pivot.x - fx * cp * d - fz * sh, CAM.pivot.y + sp * d + .1, CAM.pivot.z - fz * cp * d + fx * sh);
+  let d = C.dist;
+  for (let k = 1; k <= 6; k++) { const dd = C.dist * k / 6, x = C.pivot.x - fx * cp * dd - fz * sh * (k / 6), z = C.pivot.z - fz * cp * dd + fx * sh * (k / 6), y = C.pivot.y + sn * dd; if (y < groundH(x, z) + .32) { d = Math.max(1.2, C.dist * (k - 1) / 6); break; } }
+  C.dEff = damp(C.dEff || d, d, d < (C.dEff || d) ? 20 : 4, rdt); d = C.dEff;
+  _cp.set(C.pivot.x - fx * cp * d - fz * sh, C.pivot.y + sn * d + .1, C.pivot.z - fz * cp * d + fx * sh);
   _cp.y = Math.max(_cp.y, walkH(_cp.x, _cp.z) + .3, groundH(_cp.x, _cp.z) + .3);
-  _cl.set(CAM.pivot.x + fx * 2.2 - fz * sh * .6, CAM.pivot.y - sp * 1.4 + .1, CAM.pivot.z + fz * 2.2 + fx * sh * .6);
+  _cl.set(C.pivot.x + fx * 2.2 - fz * sh * .6, C.pivot.y - sn * 1.4 + .1, C.pivot.z + fz * 2.2 + fx * sh * .6);
   if (lock && !GAME.cine) { _cl.lerp(_cq.set(lock.pos.x, lock.pos.y + 1.2 * lock.s, lock.pos.z), .32); }
   // execution close-up
-  CAM.cineK = damp(CAM.cineK, GAME.cine ? 1 : 0, GAME.cine ? 7 : 4, rdt);
+  C.cineK = damp(C.cineK, GAME.cine ? 1 : 0, GAME.cine ? 7 : 4, rdt);
   if (GAME.cine) { const c = GAME.cine, e = c.e, a = yawTo(p.pos, e.pos) + c.side * 1.2; c.t += rdt;
-    c.px = (p.pos.x + e.pos.x) * .5 - Math.sin(a) * 3.3; c.pz = (p.pos.z + e.pos.z) * .5 - Math.cos(a) * 3.3; c.py = p.pos.y + 1.35 + c.t * .1; c.lx = (p.pos.x + e.pos.x) * .5; c.lz = (p.pos.z + e.pos.z) * .5; c.ly = p.pos.y + 1.05; CAM.lastCine = c; }
-  if (CAM.cineK > .002 && CAM.lastCine) { const c = CAM.lastCine, k = CAM.cineK; _cq.set(c.px, Math.max(c.py, groundH(c.px, c.pz) + .4), c.pz); _cp.lerp(_cq, k); _cl.lerp(_cq.set(c.lx, c.ly, c.lz), k); fovT = lerp(fovT, 40, k); }
-  if (Input.sprint && p.moveSpeed > 5) fovT += 4;
+    c.px = (p.pos.x + e.pos.x) * .5 - Math.sin(a) * 3.3; c.pz = (p.pos.z + e.pos.z) * .5 - Math.cos(a) * 3.3; c.py = p.pos.y + 1.35 + c.t * .1; c.lx = (p.pos.x + e.pos.x) * .5; c.lz = (p.pos.z + e.pos.z) * .5; c.ly = p.pos.y + 1.05; C.lastCine = c; }
+  if (C.cineK > .002 && C.lastCine) { const c = C.lastCine, k = C.cineK; _cq.set(c.px, Math.max(c.py, groundH(c.px, c.pz) + .4), c.pz); _cp.lerp(_cq, k); _cl.lerp(_cq.set(c.lx, c.ly, c.lz), k); fovT = lerp(fovT, 40, k); }
+  // speed widens the view; impacts punch it in and shove the camera along the blow
+  { const kk = FX.kick, kv = FX.kickV; kv.x += (-380 * kk.x - 25 * kv.x) * rdt; kv.z += (-380 * kk.z - 25 * kv.z) * rdt; kk.x += kv.x * rdt; kk.z += kv.z * rdt;
+    FX.fovKv += (-330 * FX.fovK - 24 * FX.fovKv) * rdt; FX.fovK += FX.fovKv * rdt; }
+  fovT += 6 * smooth(4.6, 6.4, sp) + (p.state === 'dodge' ? 3.5 : 0) + FX.fovK;
+  _cp.x += FX.kick.x; _cp.z += FX.kick.z; _cl.x += FX.kick.x * .45; _cl.z += FX.kick.z * .45;
+  // faint hand-held drift keeps a still frame alive
+  { const n = GFX.time * .33; _cl.x += (vnoise(n, 3.1) - .5) * .05; _cl.y += (vnoise(n, 9.2) - .5) * .035; _cl.z += (vnoise(n, 5.6) - .5) * .05; }
   // shake
   const s = FX.shake * FX.shake * .16, t = GFX.time * 37;
   _cp.x += (vnoise(t, 1.3) - .5) * s; _cp.y += (vnoise(t, 7.7) - .5) * s; _cp.z += (vnoise(t, 13.1) - .5) * s;
-  camera.position.copy(_cp); camera.lookAt(_cl); camera.rotateZ((vnoise(t, 21.7) - .5) * s * .25);
-  camera.fov = damp(camera.fov, fovT, 6, rdt); camera.updateProjectionMatrix();
+  camera.position.copy(_cp); camera.lookAt(_cl); camera.rotateZ((vnoise(t, 21.7) - .5) * s * .25 + (vnoise(GFX.time * .27, 14.4) - .5) * .006);
+  camera.fov = damp(camera.fov, fovT, 7, rdt); camera.updateProjectionMatrix();
 }
 
 // ---------- flow ----------
@@ -2694,7 +2833,7 @@ function spawnEnemies() {
   uiBossPips(GAME.boss); $('boss-name').textContent = GAME.boss.def.name;
 }
 function cpPos(i, out) { if (i === 0) out.set(pathX(.6), 0, .6); else { const s = LV.shrines[i - 1]; out.set(pathX(s.z) + .3, 0, s.z); } out.y = walkH(out.x, out.z); return out; }
-function placePlayer() { const p = GAME.player; cpPos(GAME.cp, p.pos); p.yaw = 0; CAM.yaw = 0; CAM.pitch = .16; CAM.pivot.set(p.pos.x, p.pos.y + 1.5, p.pos.z); p.kb.set(0, 0, 0); for (const r of p.rig.ribbons) r.reset(); }
+function placePlayer() { const p = GAME.player; cpPos(GAME.cp, p.pos); p.yaw = 0; p.mv.set(0, 0, 0); CAM.yaw = 0; CAM.pitch = .16; CAM.mdx = CAM.mdy = 0; CAM.pv.set(0, 0, 0); CAM.pivot.set(p.pos.x, p.pos.y + 1.5, p.pos.z); p.kb.set(0, 0, 0); for (const r of p.rig.ribbons) r.reset(); }
 function startGame() {
   audioInit(); GAME.state = 'play'; $('start').classList.add('fade'); setTimeout(() => $('start').classList.add('hidden'), 1000); $('hud').classList.remove('hidden');
   $('area').classList.add('show'); uiHint('move'); if (!GAME.noLock) tryLock(); GAME.player.toFree(); sfx('bell');
@@ -2796,11 +2935,11 @@ async function boot() {
 
 // ---------- debug / self-test hooks (used for automated screenshots) ----------
 window.__dbg = {
-  G: GAME, CAM, Post, FX, World, LV, Input, pathX, pathW, walkH, renderer,
+  G: GAME, CAM, Post, FX, World, LV, Input, pathX, pathW, walkH, renderer, camera,
   drawStats() { renderer.info.autoReset = false; renderer.info.reset(); Post.render(); const r = { calls: renderer.info.render.calls, tris: renderer.info.render.triangles, geos: renderer.info.memory.geometries, tex: renderer.info.memory.textures, programs: renderer.info.programs.length }; renderer.info.autoReset = true; return JSON.stringify(r); },
   start() { GAME.noLock = true; if (GAME.state === 'title') startGame(); $('start').classList.add('hidden'); },
   manual(on) { GAME.manual = on; }, step(n = 1, dt = 1 / 60) { for (let i = 0; i < n; i++) tick(dt); },
-  tp(z, u = 0) { const p = GAME.player; p.pos.set(pathX(z) + u, walkH(pathX(z) + u, z), z); CAM.pivot.set(p.pos.x, p.pos.y + 1.5, p.pos.z); for (const r of p.rig.ribbons) r.reset(); },
+  tp(z, u = 0) { const p = GAME.player; p.pos.set(pathX(z) + u, walkH(pathX(z) + u, z), z); p.ppx = p.pos.x; p.ppz = p.pos.z; CAM.pv.set(0, 0, 0); CAM.pivot.set(p.pos.x, p.pos.y + 1.5, p.pos.z); for (const r of p.rig.ribbons) r.reset(); },
   cam(yaw, pitch, dist) { CAM.yaw = yaw; if (pitch !== undefined) CAM.pitch = pitch; if (dist) { CAM.dist = dist; CAM.dEff = dist; } },
   view(a) { GAME.freeCam = a; }, look(who, ang = 0, dist = 3.2, h = 1.1, fov = 40) { const f = who === 'p' ? GAME.player : GAME.enemies[who], y = f.yaw + ang; GAME.freeCam = [f.pos.x + Math.sin(y) * dist, f.pos.y + h + .25, f.pos.z + Math.cos(y) * dist, f.pos.x, f.pos.y + h, f.pos.z, fov]; },
   render() { updateCamera(0); Post.render(); },
